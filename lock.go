@@ -2,18 +2,16 @@ package cache
 
 import (
 	"time"
-
-	"github.com/go-rat/cache/contracts"
 )
 
 type Lock struct {
-	store contracts.Driver
+	store Cache
 	key   string
 	time  *time.Duration
 	get   bool
 }
 
-func NewLock(instance contracts.Driver, key string, t ...time.Duration) *Lock {
+func NewLock(instance Cache, key string, t ...time.Duration) *Lock {
 	if len(t) == 0 {
 		return &Lock{
 			store: instance,

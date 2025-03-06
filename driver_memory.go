@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/spf13/cast"
-
-	"github.com/go-rat/cache/contracts"
 )
 
 type Memory struct {
@@ -151,7 +149,7 @@ func (r *Memory) Increment(key string, value ...int64) (int64, error) {
 	}
 }
 
-func (r *Memory) Lock(key string, t ...time.Duration) contracts.Lock {
+func (r *Memory) Lock(key string, t ...time.Duration) *Lock {
 	return NewLock(r, key, t...)
 }
 
@@ -220,7 +218,7 @@ func (r *Memory) RememberForever(key string, callback func() (any, error)) (any,
 	return val, nil
 }
 
-func (r *Memory) WithContext(ctx context.Context) contracts.Driver {
+func (r *Memory) WithContext(ctx context.Context) Cache {
 	r.ctx = ctx
 
 	return r
