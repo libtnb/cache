@@ -3,7 +3,7 @@ module github.com/go-rat/cache
 go 1.23.0
 
 require (
-	github.com/spf13/cast v1.7.1
+	github.com/spf13/cast v1.8.0
 	github.com/stretchr/testify v1.10.0
 )
 
