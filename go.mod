@@ -1,4 +1,4 @@
-module github.com/go-rat/cache
+module github.com/libtnb/cache
 
 go 1.23.0
 
