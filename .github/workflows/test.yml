@@ -22,4 +22,7 @@ jobs:
       - name: Install dependencies
         run: go mod tidy
       - name: Run tests
+        # bash everywhere: pwsh on Windows splits -coverprofile=coverage.out
+        # into two arguments.
+        shell: bash
         run: go test -race -covermode=atomic -coverprofile=coverage.out -timeout 10m ./...
