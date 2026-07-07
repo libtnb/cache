@@ -1,91 +1,128 @@
 package cache
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"time"
 )
 
-type Lock struct {
-	store Cache
-	key   string
-	time  *time.Duration
-	get   bool
+// blockRetryInterval is how often Block retries acquiring the lock.
+const blockRetryInterval = 250 * time.Millisecond
+
+// LockStore is the storage a Lock needs: acquisition via Add, owner-checked
+// atomic release via ReleaseLock, and unconditional deletion via Forget.
+// ReleaseLock must delete key only while it still holds owner's token, as a
+// non-atomic check-then-delete could remove a lock acquired by someone else
+// in between. Requiring it at construction time guarantees every acquirable
+// lock can also be released safely.
+type LockStore interface {
+	Add(key string, value any, t time.Duration) bool
+	Forget(key string) bool
+	ReleaseLock(key, owner string) bool
 }
 
-func NewLock(instance Cache, key string, t ...time.Duration) *Lock {
-	if len(t) == 0 {
-		return &Lock{
-			store: instance,
-			key:   key,
-		}
-	}
+// Lock is a mutual-exclusion lock backed by a LockStore. Every instance
+// carries a unique owner token: releasing only succeeds while the lock is
+// still held by that owner, so an instance whose lock already expired cannot
+// release a competitor's lock.
+type Lock struct {
+	store    LockStore
+	key      string
+	owner    string
+	ttl      *time.Duration
+	acquired bool
+}
 
-	return &Lock{
+func NewLock(instance LockStore, key string, t ...time.Duration) *Lock {
+	l := &Lock{
 		store: instance,
 		key:   key,
-		time:  &t[0],
+		owner: newOwner(),
 	}
+	if len(t) > 0 {
+		l.ttl = &t[0]
+	}
+
+	return l
 }
 
+func newOwner() string {
+	b := make([]byte, 16)
+	// crypto/rand.Read is documented to always succeed since Go 1.24.
+	_, _ = rand.Read(b)
+
+	return hex.EncodeToString(b)
+}
+
+// Block waits up to t for the lock to become available, retrying every
+// blockRetryInterval, and reports whether it was acquired. When a callback
+// is given, the lock is released after the callback runs.
 func (r *Lock) Block(t time.Duration, callback ...func()) bool {
+	if r.Get(callback...) {
+		return true
+	}
+
 	timer := time.NewTimer(t)
-	ticker := time.NewTicker(1 * time.Second)
+	defer timer.Stop()
+	ticker := time.NewTicker(blockRetryInterval)
 	defer ticker.Stop()
 
-	res := make(chan bool, 1)
-	go func() {
-		for {
-			select {
-			case <-timer.C:
-				if r.Get(callback...) {
-					res <- true
-					return
-				}
-
-				res <- false
-				return
-			case <-ticker.C:
-				if r.Get(callback...) {
-					res <- true
-					return
-				}
+	for {
+		select {
+		case <-timer.C:
+			return r.Get(callback...)
+		case <-ticker.C:
+			if r.Get(callback...) {
+				return true
 			}
 		}
-	}()
-
-	return <-res
+	}
 }
 
+// Get attempts to acquire the lock and reports whether it succeeded. When a
+// callback is given and the lock is acquired, the callback runs before the
+// lock is released again; Get still returns true when that release fails
+// (e.g. the lock expired while the callback ran), since the callback did
+// execute.
 func (r *Lock) Get(callback ...func()) bool {
-	var res bool
-	if r.time == nil {
-		res = r.store.Add(r.key, 1, NoExpiration)
+	var ok bool
+	if r.ttl == nil {
+		ok = r.store.Add(r.key, r.owner, NoExpiration)
 	} else {
-		res = r.store.Add(r.key, 1, *r.time)
+		ok = r.store.Add(r.key, r.owner, *r.ttl)
 	}
-
-	if !res {
+	if !ok {
 		return false
 	}
 
-	r.get = true
+	r.acquired = true
 
 	if len(callback) == 0 {
 		return true
 	}
 
+	defer r.Release()
 	callback[0]()
 
-	return r.Release()
+	return true
 }
 
+// Release releases the lock if this instance still holds it. It returns
+// false when the lock was never acquired, already released, or has expired
+// and may since be held by another owner.
 func (r *Lock) Release() bool {
-	if r.get {
-		return r.ForceRelease()
+	if !r.acquired {
+		return false
 	}
+	if !r.store.ReleaseLock(r.key, r.owner) {
+		return false
+	}
+	r.acquired = false
 
-	return false
+	return true
 }
 
+// ForceRelease releases the lock regardless of its current owner.
 func (r *Lock) ForceRelease() bool {
 	return r.store.Forget(r.key)
 }
